@@ -4,8 +4,11 @@ use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::UnorderedMap;
 use near_sdk::{env, log, near_bindgen, Balance, AccountId};
 
+mod internal;
+
 const EPOCH_PRICE_MULTIPLIER: u128 = 1000125079u128;
 const INITIAL_BALANCE: u128 = 100_000_000_000_000_000_000_000_000;
+
 
 #[derive(Serialize, Deserialize, BorshDeserialize, BorshSerialize, Debug)]
 #[serde(crate = "near_sdk::serde")]
@@ -30,29 +33,10 @@ pub struct PricePredictorContract {
 }
 
 // Define the default, which automatically initializes the contract
-// impl Default for PricePredictorContract {
-//     fn default() -> Self{
-//         Self{
-//             owner: "contract".parse().unwrap(),
-//             registered_accounts: Vec::new(),
-//             current_prices: UnorderedMap::new(b"current_prices".to_vec()),
-//             current_bets: UnorderedMap::new(b"current_bets".to_vec()),
-//             heist_balances: UnorderedMap::new(b"heist_balances".to_vec()),
-//             stheist_balances: UnorderedMap::new(b"stheist_balances".to_vec()),
-//             stheist_price: 1_000_000_000_000u128,
-//         }
-//     }
-// }
-
-
-// Implement the contract structure
-#[near_bindgen]
-impl PricePredictorContract {
-
-    #[init]
-    pub fn new(owner_id: AccountId) -> Self {
-        Self {
-            owner: owner_id,
+impl Default for PricePredictorContract {
+    fn default() -> Self{
+        Self{
+            owner: "silkking.testnet".parse().unwrap(),
             registered_accounts: Vec::new(),
             current_prices: UnorderedMap::new(b"current_prices".to_vec()),
             current_bets: UnorderedMap::new(b"current_bets".to_vec()),
@@ -61,6 +45,25 @@ impl PricePredictorContract {
             stheist_price: 1_000_000_000_000u128,
         }
     }
+}
+
+
+// Implement the contract structure
+#[near_bindgen]
+impl PricePredictorContract {
+
+    // #[init]
+    // pub fn new(owner_id: AccountId) -> Self {
+    //     Self {
+    //         owner: owner_id,
+    //         registered_accounts: Vec::new(),
+    //         current_prices: UnorderedMap::new(b"current_prices".to_vec()),
+    //         current_bets: UnorderedMap::new(b"current_bets".to_vec()),
+    //         heist_balances: UnorderedMap::new(b"heist_balances".to_vec()),
+    //         stheist_balances: UnorderedMap::new(b"stheist_balances".to_vec()),
+    //         stheist_price: 1_000_000_000_000u128,
+    //     }
+    // }
 
     pub fn register(&mut self, bet_token_id: i8) {
         let mut ini_balance = INITIAL_BALANCE;
@@ -77,6 +80,7 @@ impl PricePredictorContract {
 
     // Public method - accepts a greeting, such as "howdy", and records it
     pub fn set_current_price_for_token(&mut self, token: AccountId, price: Balance) {
+        self.assert_owner();
         log!("Saving price for token {}: {}", token, price);
         self.current_prices.insert(&token, &price);          
     }
@@ -122,6 +126,7 @@ impl PricePredictorContract {
         if to.as_str() != owner.as_str() {
             let balance = token_map.get(&to).unwrap_or(0);
             let new_balance = balance + amount;
+            log!("123456789 {} {}", balance, amount);
             token_map.insert(&to, &new_balance);
         }
     }
@@ -160,6 +165,7 @@ impl PricePredictorContract {
 
         let multiplicator = current_price * 1_000_000u128 / bet.initial_token_price / 1_000_000u128;
         let new_balance = bet.amount * multiplicator;
+        log!("New balance {}", new_balance);
 
         self.transfer(&self.owner.clone(), &acc_id, bet.in_token, new_balance);
     }
@@ -173,6 +179,7 @@ impl PricePredictorContract {
     }
 
     pub fn update_stheist_price(&mut self) {
+        self.assert_owner();
         self.stheist_price = self.stheist_price * EPOCH_PRICE_MULTIPLIER / 1_000_000_000u128;
     }
 
@@ -186,20 +193,36 @@ impl PricePredictorContract {
  * Learn more about Rust tests: https://doc.rust-lang.org/book/ch11-01-writing-tests.html
  */
 
-const OWNER: AccountId = "silkking.testnet".parse().unwrap();
-
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+    use near_sdk::test_utils::VMContextBuilder;
+    use near_sdk::{testing_env, VMContext};
 
+    fn get_context_owner(is_view: bool) -> VMContext {
+        VMContextBuilder::new()
+            .predecessor_account_id("silkking.testnet".parse().unwrap())
+            .is_view(is_view)
+            .build()
+    }
+
+    fn get_context_normal(is_view: bool) -> VMContext {
+        VMContextBuilder::new()
+            .predecessor_account_id("bob.testnet".parse().unwrap())
+            .is_view(is_view)
+            .build()
+    }
     
-
     #[test]
     fn register_with_heist() {
-        let mut contract = PricePredictorContract::new(OWNER);
+        let context = get_context(false);
+        testing_env!(context);
+
+        // let mut contract = PricePredictorContract::new(OWNER);
+        let mut contract = PricePredictorContract::default();
 
         contract.register(0);
-        let balance = contract.get_balance(&"bob.near".parse().unwrap(), &0);
+        let balance = contract.get_balance(&"silkking.testnet".parse().unwrap(), &0);
         
         assert!(balance == INITIAL_BALANCE, "Incorrect initial balance");
 
@@ -207,74 +230,90 @@ mod tests {
         assert!(registered_accounts == 1usize, "Incorrect registered accounts");
     }
 
-    // #[test]
-    // fn register_with_stheist() {
-    //     let mut contract = PricePredictorContract::default();
+    #[test]
+    fn register_with_stheist() {
+        let context = get_context(false);
+        testing_env!(context);
 
-    //     contract.register(1);
-    //     let balance = contract.get_balance(&"bob.near".parse().unwrap(), &1);
-    //     log!("register_with_stheist: Initial balance  {}. Var {}", balance, INITIAL_BALANCE);
-    //     assert!(balance == INITIAL_BALANCE, "Incorrect initial balance");
-    // }
+        let mut contract = PricePredictorContract::default();
 
-    // #[test]
-    // fn update_stheist_price_then() {
-    //     let mut contract = PricePredictorContract::default();
+        contract.register(1);
+        let balance = contract.get_balance(&"silkking.testnet".parse().unwrap(), &1);
+        log!("register_with_stheist: Initial balance  {}. Var {}", balance, INITIAL_BALANCE);
+        assert!(balance == INITIAL_BALANCE, "Incorrect initial balance");
+    }
 
-    //     contract.update_stheist_price();
-    //     contract.register(1);
-    //     let balance = contract.get_balance(&"bob.near".parse().unwrap(), &1);
-    //     log!("register_with_stheist: Initial balance  {}. Var {}", balance, INITIAL_BALANCE);
-    //     assert!(balance < INITIAL_BALANCE, "Incorrect initial balance");
-    // }
+    #[test]
+    fn update_stheist_price_then() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = PricePredictorContract::default();
 
-    // #[test]
-    // fn set_then_get_price() {
-    //     let mut contract = PricePredictorContract::default();
-    //     contract.set_current_price_for_token("meta-pool.near".parse().unwrap(), 2500000000000000000000000);
-    //     // let a = contract.get_current_prices();
-    //     // print!("Saving price for token {:?}", a[0].1);
+        contract.update_stheist_price();
+        contract.register(1);
+        let balance = contract.get_balance(&"silkking.testnet".parse().unwrap(), &1);
+        log!("register_with_stheist: Initial balance  {}. Var {}", balance, INITIAL_BALANCE);
+        assert!(balance < INITIAL_BALANCE, "Incorrect initial balance");
+    }
+
+    #[test]
+    fn set_then_get_price() {
+        let context = get_context(false);
+        testing_env!(context);
+
+        let mut contract = PricePredictorContract::default();
+        contract.set_current_price_for_token("meta-pool.near".parse().unwrap(), 2500000000000000000000000);
+        // let a = contract.get_current_prices();
+        // print!("Saving price for token {:?}", a[0].1);
         
-    // }
+    }
 
-    // #[test]
-    // fn insert_then_get_bet() {
-    //     let mut contract = PricePredictorContract::default();
-    //     contract.set_current_price_for_token("meta-pool.near".parse().unwrap(), 2500000000000000000000000);
-    //     contract.register(0);
-    //     contract.place_bet("meta-pool.near".parse().unwrap(), 0, 1);
+    #[test]
+    fn insert_then_get_bet() {
+        let context = get_context(false);
+        testing_env!(context);
 
-    //     // let bet = contract.get_bet_from_user("bob.near".parse().unwrap());
-    //     // log!("Bet {:?}", bet);
-    // }
+        let mut contract = PricePredictorContract::default();
+        contract.set_current_price_for_token("meta-pool.near".parse().unwrap(), 2500000000000000000000000);
+        contract.register(0);
+        contract.place_bet("meta-pool.near".parse().unwrap(), 0, 1);
 
-    // #[test]
-    // fn insert_then_modify_price_then_get_balance() {
-    //     let mut contract = PricePredictorContract::default();
-    //     contract.set_current_price_for_token("meta-pool.near".parse().unwrap(), 1_000_000_000u128);
-    //     contract.register(0);
-    //     let initial_balance = contract.get_balance(&"bob.near".parse().unwrap(), &0);
-    //     let bet_amount = 1_000u128;
-    //     contract.place_bet("meta-pool.near".parse().unwrap(), 0, bet_amount);
+        // let bet = contract.get_bet_from_user("bob.near".parse().unwrap());
+        // log!("Bet {:?}", bet);
+    }
 
-    //     contract.set_current_price_for_token("meta-pool.near".parse().unwrap(), 2_000_000_000u128);
-    //     contract.close_bet();
+    #[test]
+    fn insert_then_modify_price_then_get_balance() {
+        let context = get_context(false);
+        testing_env!(context);
 
-    //     let final_balance = contract.get_balance(&"bob.near".parse().unwrap(), &0);
+        let mut contract = PricePredictorContract::default();
+        contract.set_current_price_for_token("meta-pool.near".parse().unwrap(), 1_000_000_000u128);
+        contract.register(0);
+        let initial_balance = contract.get_balance(&"silkking.testnet".parse().unwrap(), &0);
+        let bet_amount = 1_000u128;
+        contract.place_bet("meta-pool.near".parse().unwrap(), 0, bet_amount);
+
+        contract.set_current_price_for_token("meta-pool.near".parse().unwrap(), 2_000_000_000u128);
+        contract.close_bet();
+
+        let final_balance = contract.get_balance(&"silkking.testnet".parse().unwrap(), &0);
         
-    //     // log!("Initial balance {}, final balance {}", initial_balance, final_balance);
-    //     assert!(final_balance - initial_balance == bet_amount, "Error rewards");
-    // }
+        assert!(final_balance - initial_balance == bet_amount, "Error rewards");
+    }
 
-    // #[test]
-    // fn update_then_get_stheist_price() {
-    //     let mut contract = PricePredictorContract::default();
+    #[test]
+    fn update_then_get_stheist_price() {
+        let context = get_context(false);
+        testing_env!(context);
 
-    //     let initial = contract.get_stheist_price();
-    //     contract.update_stheist_price();
-    //     let final_price = contract.get_stheist_price();
+        let mut contract = PricePredictorContract::default();
 
-    //     // log!("Initial: {}. Final: {}", initial, final_price);
-    //     assert!(final_price > initial, "Incorrect update");
-    // }
+        let initial = contract.get_stheist_price();
+        contract.update_stheist_price();
+        let final_price = contract.get_stheist_price();
+
+        // log!("Initial: {}. Final: {}", initial, final_price);
+        assert!(final_price > initial, "Incorrect update");
+    }
 }
