@@ -8,6 +8,7 @@ mod internal;
 
 const EPOCH_PRICE_MULTIPLIER: u128 = 1000125079u128;
 const INITIAL_BALANCE: u128 = 100_000_000_000_000_000_000_000_000;
+const WORD_PRICE: u128 = INITIAL_BALANCE;
 
 
 #[derive(Serialize, Deserialize, BorshDeserialize, BorshSerialize, Debug)]
@@ -17,6 +18,7 @@ pub struct Bet {
     initial_token_price: Balance,
     in_token: i8,
     amount: Balance,
+    long: bool,
 }
 
 // Define the contract structure
@@ -30,6 +32,8 @@ pub struct PricePredictorContract {
     heist_balances: UnorderedMap<AccountId, Balance>,
     stheist_balances: UnorderedMap<AccountId, Balance>,
     stheist_price: Balance,
+    words: Vec<String>,
+    users_word_amount: UnorderedMap<AccountId, usize>,
 }
 
 // Define the default, which automatically initializes the contract
@@ -43,6 +47,21 @@ impl Default for PricePredictorContract {
             heist_balances: UnorderedMap::new(b"heist_balances".to_vec()),
             stheist_balances: UnorderedMap::new(b"stheist_balances".to_vec()),
             stheist_price: 1_000_000_000_000u128,
+            words: vec![
+                "word1".to_string(), 
+                "word2".to_string(), 
+                "word3".to_string(), 
+                "word4".to_string(), 
+                "word5".to_string(), 
+                "word6".to_string(), 
+                "word7".to_string(), 
+                "word8".to_string(), 
+                "word9".to_string(), 
+                "word10".to_string(), 
+                "word11".to_string(), 
+                "word12".to_string()
+            ],
+            users_word_amount: UnorderedMap::new(b"users_word_amount".to_vec()),
         }
     }
 }
@@ -134,17 +153,18 @@ impl PricePredictorContract {
     /**
     * Modify so we only recieve the 
     */
-    pub fn place_bet(&mut self, token: AccountId, bet_token_id: i8, amount: Balance) {
+    pub fn place_bet(&mut self, token: AccountId, bet_token_id: i8, amount: Balance, long: bool) {
         let acc_id: AccountId = env::predecessor_account_id();
         self.transfer(&acc_id, &self.owner.clone(), bet_token_id, amount);
         // self.assert_sufficient_funds();
 
         let current_price = self.current_prices.get(&token).unwrap();
         let bet = Bet{
-            token: token,
+            token,
             initial_token_price: current_price,
             in_token: bet_token_id,
-            amount: amount
+            amount: amount,
+            long
         };
 
         
@@ -163,7 +183,13 @@ impl PricePredictorContract {
 
         let current_price = self.current_prices.get(&bet.token).unwrap();
 
-        let multiplicator = current_price * 1_000_000u128 / bet.initial_token_price / 1_000_000u128;
+        let multiplicator;
+        if bet.long {
+            multiplicator = current_price * 1_000_000u128 / bet.initial_token_price / 1_000_000u128;
+        } else {
+            multiplicator = bet.initial_token_price * 1_000_000u128 / current_price / 1_000_000u128;
+        }
+        
         let new_balance = bet.amount * multiplicator;
         log!("New balance {}", new_balance);
 
@@ -185,6 +211,32 @@ impl PricePredictorContract {
 
     pub fn get_registered_accounts(&self) -> usize {
         self.registered_accounts.len()
+    }
+
+    pub fn get_user_word_amount(&self, account_id: AccountId) -> usize {
+        self.users_word_amount.get(&account_id).unwrap_or(0usize)
+    }
+
+    pub fn get_user_words(&mut self) -> Vec<String> {
+        let user_word_amount = self.users_word_amount.get(&env::predecessor_account_id()).unwrap_or(0usize);
+        self.words[0..user_word_amount].to_vec()
+    }
+
+    pub fn get_word_price(&mut self) -> (Balance, Balance) {
+        let stheist_word_price = WORD_PRICE * 1_000_000u128 / self.stheist_price / 1_000_000u128;
+        (WORD_PRICE, stheist_word_price)
+    }
+
+    pub fn buy_word(&mut self, token_id: i8) -> String {
+        let word_prices = self.get_word_price();
+        let price = if token_id == 0 { word_prices.0 } else { word_prices.1 };
+        let user_balance = self.get_balance(&env::predecessor_account_id(), &token_id);
+        assert!(user_balance >= price, "Not enough tokens");
+
+        self.transfer(&env::predecessor_account_id(), &self.owner.clone(), token_id, price);
+        let curr_word = self.get_user_word_amount(env::predecessor_account_id());
+        self.users_word_amount.insert(&env::predecessor_account_id(), &(curr_word + 1));
+        self.words[curr_word].clone()
     }
 }
 
@@ -215,14 +267,14 @@ mod tests {
     
     #[test]
     fn register_with_heist() {
-        let context = get_context(false);
-        testing_env!(context);
+        let context = get_context_normal(false);
+        testing_env!(context.clone());
 
         // let mut contract = PricePredictorContract::new(OWNER);
         let mut contract = PricePredictorContract::default();
 
         contract.register(0);
-        let balance = contract.get_balance(&"silkking.testnet".parse().unwrap(), &0);
+        let balance = contract.get_balance(&context.predecessor_account_id, &0);
         
         assert!(balance == INITIAL_BALANCE, "Incorrect initial balance");
 
@@ -232,33 +284,33 @@ mod tests {
 
     #[test]
     fn register_with_stheist() {
-        let context = get_context(false);
-        testing_env!(context);
+        let context = get_context_normal(false);
+        testing_env!(context.clone());
 
         let mut contract = PricePredictorContract::default();
 
         contract.register(1);
-        let balance = contract.get_balance(&"silkking.testnet".parse().unwrap(), &1);
-        log!("register_with_stheist: Initial balance  {}. Var {}", balance, INITIAL_BALANCE);
+        let balance = contract.get_balance(&context.predecessor_account_id, &1);
+        // log!("register_with_stheist: Initial balance  {}. Var {}", balance, INITIAL_BALANCE);
         assert!(balance == INITIAL_BALANCE, "Incorrect initial balance");
     }
 
     #[test]
     fn update_stheist_price_then() {
-        let context = get_context(false);
-        testing_env!(context);
+        let context = get_context_owner(false);
+        testing_env!(context.clone());
         let mut contract = PricePredictorContract::default();
 
         contract.update_stheist_price();
         contract.register(1);
-        let balance = contract.get_balance(&"silkking.testnet".parse().unwrap(), &1);
-        log!("register_with_stheist: Initial balance  {}. Var {}", balance, INITIAL_BALANCE);
+        let balance = contract.get_balance(&context.predecessor_account_id, &1);
+        // log!("register_with_stheist: Initial balance  {}. Var {}", balance, INITIAL_BALANCE);
         assert!(balance < INITIAL_BALANCE, "Incorrect initial balance");
     }
 
     #[test]
     fn set_then_get_price() {
-        let context = get_context(false);
+        let context = get_context_owner(false);
         testing_env!(context);
 
         let mut contract = PricePredictorContract::default();
@@ -270,13 +322,16 @@ mod tests {
 
     #[test]
     fn insert_then_get_bet() {
-        let context = get_context(false);
-        testing_env!(context);
+        let context_owner = get_context_owner(false);
+        let context_normal = get_context_normal(false);
+        testing_env!(context_owner.clone());
 
         let mut contract = PricePredictorContract::default();
         contract.set_current_price_for_token("meta-pool.near".parse().unwrap(), 2500000000000000000000000);
+
+        testing_env!(context_normal.clone());
         contract.register(0);
-        contract.place_bet("meta-pool.near".parse().unwrap(), 0, 1);
+        contract.place_bet("meta-pool.near".parse().unwrap(), 0, 1, true);
 
         // let bet = contract.get_bet_from_user("bob.near".parse().unwrap());
         // log!("Bet {:?}", bet);
@@ -284,27 +339,34 @@ mod tests {
 
     #[test]
     fn insert_then_modify_price_then_get_balance() {
-        let context = get_context(false);
-        testing_env!(context);
+        let context_owner = get_context_owner(false);
+        let context_normal = get_context_normal(false);
 
+        testing_env!(context_owner.clone());
         let mut contract = PricePredictorContract::default();
         contract.set_current_price_for_token("meta-pool.near".parse().unwrap(), 1_000_000_000u128);
-        contract.register(0);
-        let initial_balance = contract.get_balance(&"silkking.testnet".parse().unwrap(), &0);
-        let bet_amount = 1_000u128;
-        contract.place_bet("meta-pool.near".parse().unwrap(), 0, bet_amount);
 
+        testing_env!(context_normal.clone());
+        contract.register(0);
+        
+        let initial_balance = contract.get_balance(&context_normal.predecessor_account_id, &0);
+        let bet_amount = 1_000u128;
+        contract.place_bet("meta-pool.near".parse().unwrap(), 0, bet_amount, true);
+
+        testing_env!(context_owner.clone());
         contract.set_current_price_for_token("meta-pool.near".parse().unwrap(), 2_000_000_000u128);
+
+        testing_env!(context_normal.clone());
         contract.close_bet();
 
-        let final_balance = contract.get_balance(&"silkking.testnet".parse().unwrap(), &0);
+        let final_balance = contract.get_balance(&context_normal.predecessor_account_id, &0);
         
         assert!(final_balance - initial_balance == bet_amount, "Error rewards");
     }
 
     #[test]
     fn update_then_get_stheist_price() {
-        let context = get_context(false);
+        let context = get_context_owner(false);
         testing_env!(context);
 
         let mut contract = PricePredictorContract::default();
@@ -315,5 +377,35 @@ mod tests {
 
         // log!("Initial: {}. Final: {}", initial, final_price);
         assert!(final_price > initial, "Incorrect update");
+    }
+
+    #[test]
+    fn get_buy_get_word() {
+        let context = get_context_normal(false);
+        testing_env!(context.clone());
+
+        let mut contract = PricePredictorContract::default();
+
+        let word_amount_1 = contract.get_user_word_amount(context.clone().predecessor_account_id);
+        assert!(word_amount_1 == 0, "Incorrect word amount");
+
+        let words = contract.get_user_words();
+        assert!(do_vecs_match(&words, &Vec::<String>::new()), "Error words");
+
+        contract.register(1);
+        contract.buy_word(1);
+
+        let word_amount_2 = contract.get_user_word_amount(context.clone().predecessor_account_id);
+        assert!(word_amount_2 == 1, "Incorrect word amount");
+
+        let words_2 = contract.get_user_words();
+        assert!(do_vecs_match(&words_2, &vec!["word1".to_string()]), "Error words");
+        
+
+    }
+
+    fn do_vecs_match<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {
+        let matching = a.iter().zip(b.iter()).filter(|&(a, b)| a == b).count();
+        matching == a.len() && matching == b.len()
     }
 }
